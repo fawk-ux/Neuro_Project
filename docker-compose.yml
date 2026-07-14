@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  eeg-api:
+    build: .
+    container_name: eeg-api
+    ports:
+      - "8000:8000"
+    environment:
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - eeg-network
+
+  eeg-dashboard:
+    build: .
+    container_name: eeg-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - API_URL=http://eeg-api:8000
+    depends_on:
+      - eeg-api
+    networks:
+      - eeg-network
+
+networks:
+  eeg-network:
+    driver: bridge

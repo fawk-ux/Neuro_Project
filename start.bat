@@ -26,7 +26,7 @@ timeout /t 3 /nobreak >nul
 
 echo.
 echo [INFO] Starting Streamlit dashboard...
-start "EEG Dashboard" cmd /k "streamlit run dashboard.py"
+streamlit run dashboard.py
 
 echo.
 pause
