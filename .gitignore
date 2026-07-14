@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE (редакторы)
+.vscode/
+.idea/
+
+# Окружения и зависимости
+venv/
+env/
+.env
+
+# Данные (чтобы не заливать свои CSV с ЭЭГ в открытый доступ)
+*.csv
+*.log
+*.sqlite3
+
+# Системные файлы
+.DS_Store
+Thumbs.db
