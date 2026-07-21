@@ -124,25 +124,28 @@ def predict(data: EEGFeaturesInput) -> dict[str, Any]:
     try:
         # Преобразование входных данных в DataFrame
         if isinstance(data.features, dict):
-            # Если передан словарь, создаем DataFrame с заполнением недостающих фич медианой/0
-            input_dict = {col: [data.features.get(col, 0.0)] for col in FEATURE_NAMES}
+            cols = FEATURE_NAMES if FEATURE_NAMES else list(data.features.keys())
+            input_dict = {col: [data.features.get(col, 0.0)] for col in cols}
             df_input = pd.DataFrame(input_dict)
         elif isinstance(data.features, list):
-            if len(data.features) != len(FEATURE_NAMES):
-                # Если передан список другого размера
+            if FEATURE_NAMES and len(data.features) != len(FEATURE_NAMES):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Expected {len(FEATURE_NAMES)} features, but got {len(data.features)}."
                 )
-            df_input = pd.DataFrame([data.features], columns=FEATURE_NAMES)
+            cols = FEATURE_NAMES if len(FEATURE_NAMES) == len(data.features) else None
+            df_input = pd.DataFrame([data.features], columns=cols)
         else:
             raise HTTPException(status_code=400, detail="Invalid feature format.")
+
+        # Замена возможного NaN / Inf
+        df_input = df_input.fillna(0.0).replace([np.inf, -np.inf], 0.0)
 
         # Масштабирование признаков (если модель требует scaled инпут)
         if meta.get("best_model") == "LogisticRegression" and scaler is not None:
             X_val = scaler.transform(df_input)
         else:
-            X_val = df_input.values
+            X_val = df_input
 
         # Честный инференс обученной модели
         pred_idx = int(model.predict(X_val)[0])

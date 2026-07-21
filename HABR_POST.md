@@ -121,6 +121,5 @@ Inference	2 мс	5 мс
     Адаптивное обучение — корректировка темпа лекций по ЭЭГ
     Real-time pipeline — обработка потока 250 Гц онлайн
 
-GitHub: github.com/username/neuro-project
-Демо: youtu.be/placeholder
-Проект выполнен в рамках программы STARS, Университет ИТМО.
+* **GitHub:** [github.com/fawk-ux/neuro-project](https://github.com/fawk-ux/neuro-project)
+* **Проект выполнен в рамках программы STARS, Университет ИТМО.**

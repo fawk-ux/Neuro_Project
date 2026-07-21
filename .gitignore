@@ -1,21 +1,25 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# IDE (редакторы)
-.vscode/
-.idea/
-
-# Окружения и зависимости
+# Виртуальные окружения (Обязательно!)
+.venv/
 venv/
 env/
 .env
 
-# Данные (чтобы не заливать свои CSV с ЭЭГ в открытый доступ)
-*.csv
+# IDE и редакторы кода
+.vscode/
+.idea/
+
+# Логи и временные базы данных
 *.log
 *.sqlite3
+
+# Датасеты (игнорируем тяжелые CSV, кроме демо-файла)
+*.csv
+!mental-state.csv
 
 # Системные файлы
 .DS_Store
