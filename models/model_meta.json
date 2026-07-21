@@ -1,6 +1,6 @@
 {
-  "best_model": "RandomForest",
-  "cv_accuracy": 0.9629,
+  "best_model": "XGBoost",
+  "cv_accuracy": 0.9806,
   "feature_names": [
     "lag1_mean_0",
     "lag1_mean_1",
