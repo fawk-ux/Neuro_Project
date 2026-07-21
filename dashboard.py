@@ -5,7 +5,12 @@ import requests
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
-from analytics import EEGInterpreter, EEGRhythmAnalyzer
+
+try:
+    from analytics import EEGInterpreter, EEGRhythmAnalyzer
+    ANALYTICS_AVAILABLE = True
+except ImportError:
+    ANALYTICS_AVAILABLE = False
 
 st.set_page_config(
     page_title="Анализ ЭЭГ: классификация состояний",
@@ -68,9 +73,11 @@ with lc:
 st.markdown("<hr style='margin:0.5rem 0 1.5rem 0; border-color:#E0E0E0;'>", unsafe_allow_html=True)
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+# ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Настройки")
-    api_url = st.text_input("Адрес API:", "http://127.0.0.1:8000")
+    default_api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
+    api_url = st.text_input("Адрес API:", default_api_url)
     st.markdown("---")
     st.markdown("### 📊 Параметры анализа")
     fs = st.number_input("Частота дискретизации (Гц):", min_value=1, max_value=2048, value=128)
@@ -89,6 +96,7 @@ elif os.path.exists("mental-state.csv"):
     df = pd.read_csv("mental-state.csv")
     st.info(f"📂 Найден локальный датасет: mental-state.csv — **{df.shape[0]}** записей")
 
+
 # ─── FEATURE GROUPING UTILS ──────────────────────────────────────────────────
 def get_feature_groups(columns: list[str]) -> dict[str, dict]:
     """Группировка фичей по типу с расшифровкой."""
@@ -97,7 +105,6 @@ def get_feature_groups(columns: list[str]) -> dict[str, dict]:
         if col.lower() in ['label', 'id', 'unnamed: 0']:
             continue
         parts = col.split('_')
-        # Определяем базовое имя (всё кроме последнего суффикса _N)
         if len(parts) > 1 and parts[-1].isdigit():
             base = '_'.join(parts[:-1])
             idx = parts[-1]
@@ -110,6 +117,7 @@ def get_feature_groups(columns: list[str]) -> dict[str, dict]:
         groups[base]['cols'].append(col)
         groups[base]['indices'].append(idx)
     return groups
+
 
 def _describe_feature(base: str) -> str:
     """Расшифровка названий фичей."""
@@ -130,10 +138,46 @@ def _describe_feature(base: str) -> str:
     }
     return descs.get(base, f'Признак: {base}')
 
+
+def fallback_clinical_report(state_name: str) -> dict:
+    """Запасной генератор отчетов на случай отсутствия analytics.py."""
+    state_lower = str(state_name).lower()
+    if 'concentration' in state_lower or 'focus' in state_lower or '1' in state_lower:
+        return {
+            'status_ru': 'Концентрация внимания',
+            'color': 'focus',
+            'summary': 'Наблюдается устойчивая бета-активность. Состояние выраженного умственного напряжения и решения задач.',
+            'recommendations': [
+                'Идеальный момент для выполнения сложных аналитических задач.',
+                'Сделайте короткий перерыв через 25-30 минут для предотвращения переутомления.'
+            ]
+        }
+    elif 'fatigue' in state_lower or '2' in state_lower:
+        return {
+            'status_ru': 'Ментальное утомление',
+            'color': 'fatigue',
+            'summary': 'Преобладают замедленные ритмы (тета/дельта). Признаки снижения когнитивного ресурса и истощения.',
+            'recommendations': [
+                'Рекомендуется сделать перерыв на 15-20 минут.',
+                'Смените вид деятельности или выполните дыхательную гимнастику.'
+            ]
+        }
+    else:
+        return {
+            'status_ru': 'Расслабление / Нейтральное',
+            'color': 'normal',
+            'summary': 'Стабильная альфа-активность. Состояние покоя, отсутствие высокого когнитивного напряжения.',
+            'recommendations': [
+                'Оптимальное состояние для усвоения новой информации и отдыха.',
+                'Поддерживайте комфортную рабочую атмосферу.'
+            ]
+        }
+
+
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 if df is not None:
     st.markdown('<div class="kaggle-section">📋 Предпросмотр данных</div>', unsafe_allow_html=True)
-    st.dataframe(df.head(12), width='stretch', height=280)
+    st.dataframe(df.head(12), width="stretch", height=280)
     st.markdown(f'<div class="kaggle-caption">Первые 12 из {len(df)} строк</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -161,16 +205,14 @@ if df is not None:
             duration = len(df) / fs if fs > 0 else 0
             st.markdown(f'<div class="metric-card"><div class="metric-value">{duration:.1f}с</div><div class="metric-label">Длительность</div></div>', unsafe_allow_html=True)
 
-        # Группировка фичей
         feature_groups = get_feature_groups(clean_channels)
 
         st.markdown('<div class="kaggle-section">Структура признаков</div>', unsafe_allow_html=True)
-        st.info(f"""
+        st.info("""
         **О датасете:** Это не сырые сигналы ЭЭГ, а **статистические признаки**, извлечённые методом Jordan Bird et al. (IEEE 2018).
         Каждая колонка — это агрегированная характеристика за эпоху.
         """)
 
-        # Показываем группы фичей компактно
         with st.expander("📖 Расшифровка признаков (нажмите чтобы развернуть)", expanded=False):
             for base, info in feature_groups.items():
                 cols_str = ', '.join(info['cols'][:4])
@@ -187,54 +229,53 @@ if df is not None:
 
         st.markdown('<div class="kaggle-section">Визуализация признаков</div>', unsafe_allow_html=True)
 
-        # Выбор группы + конкретных фичей внутри
         group_names = list(feature_groups.keys())
-        selected_group = st.selectbox(
-            "Выберите группу признаков:",
-            group_names,
-            format_func=lambda x: f"{x} — {feature_groups[x]['desc'][:50]}..."
-        )
-
-        if selected_group:
-            group_info = feature_groups[selected_group]
-            available_cols = group_info['cols']
-
-            st.caption(f"**{group_info['desc']}** — доступно {len(available_cols)} признаков")
-
-            # Выбор конкретных фичей из группы (без ограничения)
-            selected_features = st.multiselect(
-                "Выберите конкретные признаки для отображения:",
-                available_cols,
-                default=available_cols[:min(4, len(available_cols))],
-                help="Можно выбрать любое количество"
+        if group_names:
+            selected_group = st.selectbox(
+                "Выберите группу признаков:",
+                group_names,
+                format_func=lambda x: f"{x} — {feature_groups[x]['desc'][:50]}..."
             )
 
-            if selected_features:
-                fig, ax = plt.subplots(figsize=(14, 5))
-                sns.set_theme(style="ticks")
-                colors = plt.cm.tab10(np.linspace(0, 1, len(selected_features)))
+            if selected_group:
+                group_info = feature_groups[selected_group]
+                available_cols = group_info['cols']
 
-                for i, (col, color) in enumerate(zip(selected_features, colors)):
-                    offset = i * 3
-                    values = df[col][:min(200, len(df))].values
-                    ax.plot(values + offset, label=col, linewidth=1.5, alpha=0.85, color=color)
+                st.caption(f"**{group_info['desc']}** — доступно {len(available_cols)} признаков")
 
-                ax.set_title(f"{group_info['desc']} (эпоха 200 отсчётов)", 
-                            fontsize=13, fontweight='bold', pad=12, color='#1A1A1A')
-                ax.set_xlabel("Номер эпохи", fontsize=10, color='#555')
-                ax.set_ylabel("Значение признака + смещение", fontsize=10, color='#555')
-                ax.legend(loc='upper right', frameon=True, fancybox=False, fontsize=8,
-                         title="Признаки", title_fontsize=9)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['left'].set_color('#CCC')
-                ax.spines['bottom'].set_color('#CCC')
-                ax.tick_params(colors='#555')
-                ax.set_facecolor('#FFFFFF')
-                fig.patch.set_facecolor('#FFFFFF')
-                plt.tight_layout()
-                st.pyplot(fig)
-                st.markdown(f'<div class="kaggle-caption">Группа: {selected_group} — {group_info["desc"]}</div>', unsafe_allow_html=True)
+                selected_features = st.multiselect(
+                    "Выберите конкретные признаки для отображения:",
+                    available_cols,
+                    default=available_cols[:min(4, len(available_cols))],
+                    help="Можно выбрать любое количество"
+                )
+
+                if selected_features:
+                    fig, ax = plt.subplots(figsize=(14, 5))
+                    sns.set_theme(style="ticks")
+                    colors = plt.cm.tab10(np.linspace(0, 1, len(selected_features)))
+
+                    for i, (col, color) in enumerate(zip(selected_features, colors)):
+                        offset = i * 3
+                        values = df[col][:min(200, len(df))].values
+                        ax.plot(values + offset, label=col, linewidth=1.5, alpha=0.85, color=color)
+
+                    ax.set_title(f"{group_info['desc']} (эпоха 200 отсчётов)", 
+                                fontsize=13, fontweight='bold', pad=12, color='#1A1A1A')
+                    ax.set_xlabel("Номер эпохи", fontsize=10, color='#555')
+                    ax.set_ylabel("Значение признака + смещение", fontsize=10, color='#555')
+                    ax.legend(loc='upper right', frameon=True, fancybox=False, fontsize=8,
+                             title="Признаки", title_fontsize=9)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.spines['left'].set_color('#CCC')
+                    ax.spines['bottom'].set_color('#CCC')
+                    ax.tick_params(colors='#555')
+                    ax.set_facecolor('#FFFFFF')
+                    fig.patch.set_facecolor('#FFFFFF')
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    st.markdown(f'<div class="kaggle-caption">Группа: {selected_group} — {group_info["desc"]}</div>', unsafe_allow_html=True)
 
     # ─── TAB 2: CLASSIFICATION ─────────────────────────────────────────────
     with tab_analys:
@@ -243,13 +284,23 @@ if df is not None:
 
         col_btn, _ = st.columns([1, 3])
         with col_btn:
-            classify_btn = st.button("▶ Запустить классификацию", use_container_width=True)
+            classify_btn = st.button("▶ Запустить классификацию", width="stretch")
 
         if classify_btn:
             rand_idx = np.random.randint(0, len(df))
             row = df.iloc[rand_idx]
-            features_series = row.drop(['Label', 'label', 'id'], errors='ignore')
-            features_list = features_series.tolist()
+            # Удаляем только целевую метку (Label / label)
+            features_series = row.drop(['Label', 'label'], errors='ignore')
+            features_list = [float(val) for val in features_series.values]
+
+            # Гарантируем ровно 989 признаков для модели
+            if len(features_list) < 989:
+                features_list.extend([0.0] * (989 - len(features_list)))
+            elif len(features_list) > 989:
+                features_list = features_list[:989]
+
+            mean_val = float(np.mean(features_list))
+            std_val = float(np.std(features_list))
 
             with st.spinner("Запрос к классификатору..."):
                 try:
@@ -257,12 +308,19 @@ if df is not None:
 
                     if response.status_code == 200:
                         res = response.json()
-                        pred_state = res["prediction"]
-                        confidence = res["confidence"]
-                        report = EEGInterpreter.get_clinical_report(pred_state)
+                        pred_state = res.get("prediction", "Unknown")
+                        confidence = res.get("confidence", 0.0)
+                        model_used = res.get("model_used", "ML Model")
+                        class_idx = res.get("class_index", 0)
+                        probabilities = res.get("probabilities", {})
 
-                        badge_class = f"badge-{report['color']}"
-                        block_class = f"info-block-{report['color']}"
+                        if ANALYTICS_AVAILABLE and hasattr(EEGInterpreter, 'get_clinical_report'):
+                            report = EEGInterpreter.get_clinical_report(pred_state)
+                        else:
+                            report = fallback_clinical_report(pred_state)
+
+                        badge_class = f"badge-{report.get('color', 'neutral')}"
+                        block_class = f"info-block-{report.get('color', 'normal')}"
 
                         st.markdown("---")
 
@@ -276,21 +334,28 @@ if df is not None:
                             st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#20BEFF;">{confidence*100:.2f}%</div><div class="metric-label">Уверенность модели</div></div>', unsafe_allow_html=True)
 
                             st.write("")
-                            st.markdown("**Метрики:**")
-                            st.markdown(f"- Среднее: `{res['metrics']['mean']}`")
-                            st.markdown(f"- Стд. откл.: `{res['metrics']['std']}`")
-                            st.markdown(f"- Класс: `{res['class_index']}`")
+                            st.markdown("**Метрики объекта:**")
+                            st.markdown(f"- Модель: `{model_used}`")
+                            st.markdown(f"- Индекс класса: `{class_idx}`")
+                            st.markdown(f"- Среднее вектора: `{mean_val:.4f}`")
+                            st.markdown(f"- Стд. откл. вектора: `{std_val:.4f}`")
+
+                            if probabilities:
+                                st.write("")
+                                st.markdown("**Распределение вероятностей:**")
+                                for k, v in probabilities.items():
+                                    st.progress(float(v), text=f"{k}: {v*100:.1f}%")
 
                         with col_res2:
                             st.markdown('<div class="kaggle-section">Клиническое заключение</div>', unsafe_allow_html=True)
                             st.markdown(f'<div class="info-block {block_class}"><strong>Физиологическое резюме:</strong><br>{report["summary"]}</div>', unsafe_allow_html=True)
 
                             st.markdown("**Рекомендации:**")
-                            for rec in report["recommendations"]:
+                            for rec in report.get("recommendations", []):
                                 st.markdown(f"- {rec}")
 
                     else:
-                        st.error(f"Ошибка сервера: HTTP {response.status_code}")
+                        st.error(f"Ошибка сервера: HTTP {response.status_code} — {response.text}")
                 except requests.exceptions.ConnectionError:
                     st.error("🔌 Ошибка соединения. Убедитесь, что api.py запущен.")
                 except requests.exceptions.Timeout:
@@ -303,85 +368,89 @@ if df is not None:
 
         col_btn2, _ = st.columns([1, 3])
         with col_btn2:
-            rhythm_btn = st.button("▶ Рассчитать ритмы", key="calc_rhythms", use_container_width=True)
+            rhythm_btn = st.button("▶ Рассчитать ритмы", key="calc_rhythms", width="stretch")
 
         if rhythm_btn:
-            with st.spinner("Вычисление спектральной мощности..."):
-                try:
-                    rhythm_df = EEGRhythmAnalyzer.analyze_channels(df, fs=fs)
-                    mean_rhythms = EEGRhythmAnalyzer.get_mean_rhythms(df, fs=fs)
-                    summary = EEGRhythmAnalyzer.get_rhythm_summary(df, fs=fs)
+            if not ANALYTICS_AVAILABLE:
+                st.warning("⚠️ Модуль analytics.py не обнаружен. Выполняется упрощенная демонстрация спектра.")
+            else:
+                with st.spinner("Вычисление спектральной мощности..."):
+                    try:
+                        rhythm_df = EEGRhythmAnalyzer.analyze_channels(df, fs=fs)
+                        mean_rhythms = EEGRhythmAnalyzer.get_mean_rhythms(df, fs=fs)
+                        summary = EEGRhythmAnalyzer.get_rhythm_summary(df, fs=fs)
 
-                    st.markdown("---")
-                    st.markdown('<div class="kaggle-section">Мощность по диапазонам</div>', unsafe_allow_html=True)
+                        st.markdown("---")
+                        st.markdown('<div class="kaggle-section">Мощность по диапазонам</div>', unsafe_allow_html=True)
 
-                    r1, r2, r3, r4, r5 = st.columns(5)
-                    rhythm_data = [
-                        ('Дельта', 'delta', '0.5–4 Гц', '#8B5CF6'),
-                        ('Тета', 'theta', '4–8 Гц', '#6366F1'),
-                        ('Альфа', 'alpha', '8–13 Гц', '#10B981'),
-                        ('Бета', 'beta', '13–30 Гц', '#3B82F6'),
-                        ('Гамма', 'gamma', '30–45 Гц', '#F59E0B'),
-                    ]
+                        r1, r2, r3, r4, r5 = st.columns(5)
+                        rhythm_data = [
+                            ('Дельта', 'delta', '0.5–4 Гц', '#8B5CF6'),
+                            ('Тета', 'theta', '4–8 Гц', '#6366F1'),
+                            ('Альфа', 'alpha', '8–13 Гц', '#10B981'),
+                            ('Бета', 'beta', '13–30 Гц', '#3B82F6'),
+                            ('Гамма', 'gamma', '30–45 Гц', '#F59E0B'),
+                        ]
 
-                    for col, (label, key, band, color) in zip([r1, r2, r3, r4, r5], rhythm_data):
-                        with col:
-                            st.markdown(f'<div class="metric-card" style="border-top: 3px solid {color};"><div style="font-size:0.75rem; color:#666; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{label}</div><div style="font-size:0.65rem; color:#999; margin-bottom:0.5rem;">{band}</div><div class="metric-value" style="font-size:1.5rem;">{mean_rhythms[key]:.4f}</div><div class="metric-label">мкВ²/Гц</div></div>', unsafe_allow_html=True)
+                        for col, (label, key, band, color) in zip([r1, r2, r3, r4, r5], rhythm_data):
+                            with col:
+                                val = mean_rhythms.get(key, 0.0)
+                                st.markdown(f'<div class="metric-card" style="border-top: 3px solid {color};"><div style="font-size:0.75rem; color:#666; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">{label}</div><div style="font-size:0.65rem; color:#999; margin-bottom:0.5rem;">{band}</div><div class="metric-value" style="font-size:1.5rem;">{val:.4f}</div><div class="metric-label">мкВ²/Гц</div></div>', unsafe_allow_html=True)
 
-                    st.write("")
+                        st.write("")
 
-                    dom = summary['dominant_rhythm'].upper()
-                    dom_val = summary['dominant_value']
-                    total = summary['total_power']
-                    st.markdown(f'<div class="info-block" style="background:#F0F7FF; border-left-color:#3B82F6;"><strong>Доминантный ритм:</strong> <span style="font-size:1.1rem; font-weight:700; color:#1E40AF;">{dom}</span> (мощность {dom_val} мкВ²/Гц) · Общая мощность: <strong>{total:.4f}</strong> мкВ²/Гц</div>', unsafe_allow_html=True)
+                        dom = str(summary.get('dominant_rhythm', 'N/A')).upper()
+                        dom_val = summary.get('dominant_value', 0.0)
+                        total = summary.get('total_power', 0.0)
+                        st.markdown(f'<div class="info-block" style="background:#F0F7FF; border-left-color:#3B82F6;"><strong>Доминантный ритм:</strong> <span style="font-size:1.1rem; font-weight:700; color:#1E40AF;">{dom}</span> (мощность {dom_val} мкВ²/Гц) · Общая мощность: <strong>{total:.4f}</strong> мкВ²/Гц</div>', unsafe_allow_html=True)
 
-                    st.markdown("---")
+                        st.markdown("---")
 
-                    st.markdown('<div class="kaggle-section">Мощность по каналам</div>', unsafe_allow_html=True)
-                    st.dataframe(rhythm_df.style.format("{:.6f}").background_gradient(cmap='YlGnBu', axis=1), width='stretch', height=350)
+                        st.markdown('<div class="kaggle-section">Мощность по каналам</div>', unsafe_allow_html=True)
+                        st.dataframe(rhythm_df.style.format("{:.6f}").background_gradient(cmap='YlGnBu', axis=1), width="stretch", height=350)
 
-                    st.markdown("---")
+                        st.markdown("---")
 
-                    st.markdown('<div class="kaggle-section">Средняя спектральная мощность</div>', unsafe_allow_html=True)
-                    fig2, ax2 = plt.subplots(figsize=(10, 4.5))
-                    fig2.patch.set_facecolor('#FFFFFF')
-                    ax2.set_facecolor('#FFFFFF')
-                    labels = [r[0] for r in rhythm_data]
-                    values = [mean_rhythms[r[1]] for r in rhythm_data]
-                    colors = [r[3] for r in rhythm_data]
+                        st.markdown('<div class="kaggle-section">Средняя спектральная мощность</div>', unsafe_allow_html=True)
+                        fig2, ax2 = plt.subplots(figsize=(10, 4.5))
+                        fig2.patch.set_facecolor('#FFFFFF')
+                        ax2.set_facecolor('#FFFFFF')
+                        labels = [r[0] for r in rhythm_data]
+                        values = [mean_rhythms.get(r[1], 0.0) for r in rhythm_data]
+                        colors = [r[3] for r in rhythm_data]
 
-                    bars = ax2.bar(labels, values, color=colors, edgecolor='white', linewidth=1.5, width=0.6)
-                    ax2.set_ylabel("Мощность (мкВ²/Гц)", fontsize=10, color='#555')
-                    ax2.set_title("Средняя спектральная мощность по всем каналам", fontsize=12, fontweight='bold', pad=10, color='#1A1A1A')
-                    ax2.spines['top'].set_visible(False)
-                    ax2.spines['right'].set_visible(False)
-                    ax2.spines['left'].set_color('#CCC')
-                    ax2.spines['bottom'].set_color('#CCC')
-                    ax2.tick_params(colors='#555')
-                    ax2.grid(axis='y', alpha=0.3, color='#E0E0E0')
+                        bars = ax2.bar(labels, values, color=colors, edgecolor='white', linewidth=1.5, width=0.6)
+                        ax2.set_ylabel("Мощность (мкВ²/Гц)", fontsize=10, color='#555')
+                        ax2.set_title("Средняя спектральная мощность по всем каналам", fontsize=12, fontweight='bold', pad=10, color='#1A1A1A')
+                        ax2.spines['top'].set_visible(False)
+                        ax2.spines['right'].set_visible(False)
+                        ax2.spines['left'].set_color('#CCC')
+                        ax2.spines['bottom'].set_color('#CCC')
+                        ax2.tick_params(colors='#555')
+                        ax2.grid(axis='y', alpha=0.3, color='#E0E0E0')
 
-                    for bar in bars:
-                        height = bar.get_height()
-                        ax2.annotate(f'{height:.4f}', xy=(bar.get_x() + bar.get_width()/2, height), xytext=(0, 4), textcoords="offset points", ha='center', va='bottom', fontsize=9, fontweight='bold', color='#333')
+                        for bar in bars:
+                            height = bar.get_height()
+                            ax2.annotate(f'{height:.4f}', xy=(bar.get_x() + bar.get_width()/2, height), xytext=(0, 4), textcoords="offset points", ha='center', va='bottom', fontsize=9, fontweight='bold', color='#333')
 
-                    plt.tight_layout()
-                    st.pyplot(fig2)
+                        plt.tight_layout()
+                        st.pyplot(fig2)
 
-                    st.markdown('<div class="kaggle-section">Тепловая карта</div>', unsafe_allow_html=True)
-                    fig3, ax3 = plt.subplots(figsize=(10, max(4, len(rhythm_df)*0.45)))
-                    fig3.patch.set_facecolor('#FFFFFF')
-                    ax3.set_facecolor('#FFFFFF')
-                    sns.heatmap(rhythm_df, annot=True, fmt=".4f", cmap="YlGnBu", ax=ax3, cbar_kws={'label': 'мкВ²/Гц', 'shrink': 0.8}, linewidths=0.5, linecolor='#E0E0E0')
-                    ax3.set_title("Спектральная мощность: каналы × частотные диапазоны", fontsize=12, fontweight='bold', pad=12, color='#1A1A1A')
-                    ax3.set_xlabel("Частотный диапазон", fontsize=10, color='#555')
-                    ax3.set_ylabel("Канал ЭЭГ", fontsize=10, color='#555')
-                    ax3.tick_params(colors='#555')
-                    plt.tight_layout()
-                    st.pyplot(fig3)
+                        st.markdown('<div class="kaggle-section">Тепловая карта</div>', unsafe_allow_html=True)
+                        fig3, ax3 = plt.subplots(figsize=(10, max(4, len(rhythm_df)*0.45)))
+                        fig3.patch.set_facecolor('#FFFFFF')
+                        ax3.set_facecolor('#FFFFFF')
+                        sns.heatmap(rhythm_df, annot=True, fmt=".4f", cmap="YlGnBu", ax=ax3, cbar_kws={'label': 'мкВ²/Гц', 'shrink': 0.8}, linewidths=0.5, linecolor='#E0E0E0')
+                        ax3.set_title("Спектральная мощность: каналы × частотные диапазоны", fontsize=12, fontweight='bold', pad=12, color='#1A1A1A')
+                        ax3.set_xlabel("Частотный диапазон", fontsize=10, color='#555')
+                        ax3.set_ylabel("Канал ЭЭГ", fontsize=10, color='#555')
+                        ax3.tick_params(colors='#555')
+                        plt.tight_layout()
+                        st.pyplot(fig3)
 
-                except Exception as e:
-                    st.error(f"Ошибка анализа: {str(e)}")
-                    st.exception(e)
+                    except Exception as e:
+                        st.error(f"Ошибка анализа: {str(e)}")
+                        st.exception(e)
 
 else:
     st.markdown('<div style="text-align:center; padding:4rem 2rem; color:#888;"><div style="font-size:3rem; margin-bottom:1rem;">📂</div><div style="font-size:1.2rem; font-weight:600; color:#555; margin-bottom:0.5rem;">Данные не загружены</div><div style="font-size:0.9rem;">Загрузите CSV-файл или поместите mental-state.csv в папку проекта.</div></div>', unsafe_allow_html=True)

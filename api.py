@@ -1,124 +1,174 @@
 from __future__ import annotations
 
 import os
+import json
+import joblib
 import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Any
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Union
 
 app = FastAPI(
     title="EEG Brainwave API",
-    description="Backend server for mental state classification and spectral analysis of EEG data. Part of ITMO Stars research project.",
-    version="2.1",
+    description="Backend server for EEG mental state classification. Integrated with trained ML model for ITMO Stars.",
+    version="2.2",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-class EEGFeatures(BaseModel):
-    features: list[float]
+# Пути к сохраненным артефактам
+MODEL_PATH = "models/model.pkl"
+SCALER_PATH = "models/scaler.pkl"
+META_PATH = "models/model_meta.json"
 
-class EEGChannelData(BaseModel):
-    channel: str
-    data: list[float]
+# Глобальные переменные для модели
+model = None
+scaler = None
+meta = {}
+FEATURE_NAMES: List[str] = []
+TARGET_NAMES: Dict[str, str] = {"0": "Relax/Neutral", "1": "Concentration", "2": "Mental Fatigue"}
 
-class EEGRhythmRequest(BaseModel):
-    channels: list[EEGChannelData]
-    fs: int = 128
+
+@app.on_event("startup")
+def load_artifacts():
+    global model, scaler, meta, FEATURE_NAMES, TARGET_NAMES
+    
+    if os.path.exists(MODEL_PATH):
+        model = joblib.load(MODEL_PATH)
+        print(f"✅ Loaded ML model from {MODEL_PATH}")
+    else:
+        print(f"⚠️ Model not found at {MODEL_PATH}. Run neuro_project_v2.py first.")
+
+    if os.path.exists(SCALER_PATH):
+        scaler = joblib.load(SCALER_PATH)
+        print(f"✅ Loaded Scaler from {SCALER_PATH}")
+
+    if os.path.exists(META_PATH):
+        with open(META_PATH, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+            FEATURE_NAMES = meta.get("feature_names", [])
+            TARGET_NAMES = meta.get("target_names", TARGET_NAMES)
+            print(f"✅ Loaded Metadata ({len(FEATURE_NAMES)} features expected)")
+
+
+class EEGFeaturesInput(BaseModel):
+    features: Union[Dict[str, float], List[float]] = Field(
+        ..., 
+        description="Словарь названий фич и значений или вектор фич"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "features": {
+                        "AF3_alpha": 12.45,
+                        "AF3_beta": 8.12,
+                        "F3_theta": 15.30,
+                        "alpha_beta_ratio": 1.53,
+                        "spectral_entropy": 0.84
+                    }
+                }
+            ]
+        }
+    }
+
+
+class PredictResponse(BaseModel):
+    class_index: int
+    prediction: str
+    confidence: float
+    probabilities: Dict[str, float]
+    model_used: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "class_index": 1,
+                    "prediction": "Concentration",
+                    "confidence": 0.9125,
+                    "probabilities": {
+                        "Relax/Neutral": 0.0521,
+                        "Concentration": 0.9125,
+                        "Mental Fatigue": 0.0354
+                    },
+                    "model_used": "XGBoost"
+                }
+            ]
+        }
+    }
+
 
 @app.get("/")
 def home() -> dict[str, Any]:
     return {
-        "status": "active",
+        "status": "active" if model is not None else "degraded (model missing)",
         "project": "ITMO Stars EEG Analysis",
-        "endpoints": ["POST /predict", "POST /rhythms"],
-        "version": "2.1"
+        "model_loaded": meta.get("best_model", "None"),
+        "cv_accuracy": meta.get("cv_accuracy", "N/A"),
+        "expected_features_count": len(FEATURE_NAMES),
+        "endpoints": ["POST /predict"]
     }
 
-@app.post("/predict")
-def predict(data: EEGFeatures) -> dict[str, Any]:
-    if not data.features:
-        raise HTTPException(status_code=400, detail="Empty feature list")
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(data: EEGFeaturesInput) -> dict[str, Any]:
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ML Model is not loaded on server. Run neuro_project_v2.py to train and save model.pkl"
+        )
 
     try:
-        feats = np.array(data.features)
-        mean_val = float(np.mean(feats))
-        std_val = float(np.std(feats)) if len(feats) > 1 else 1.0
-
-        score = mean_val * std_val
-        if score < -0.15:
-            class_idx = 0
-            state_name = "Relax/Neutral"
-            confidence = float(np.clip(0.80 + abs(score)*0.1, 0.75, 0.99))
-        elif score > 0.15:
-            class_idx = 2
-            state_name = "Mental Fatigue"
-            confidence = float(np.clip(0.78 + score*0.08, 0.70, 0.97))
+        # Преобразование входных данных в DataFrame
+        if isinstance(data.features, dict):
+            # Если передан словарь, создаем DataFrame с заполнением недостающих фич медианой/0
+            input_dict = {col: [data.features.get(col, 0.0)] for col in FEATURE_NAMES}
+            df_input = pd.DataFrame(input_dict)
+        elif isinstance(data.features, list):
+            if len(data.features) != len(FEATURE_NAMES):
+                # Если передан список другого размера
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Expected {len(FEATURE_NAMES)} features, but got {len(data.features)}."
+                )
+            df_input = pd.DataFrame([data.features], columns=FEATURE_NAMES)
         else:
-            class_idx = 1
-            state_name = "Concentration"
-            confidence = float(np.random.uniform(0.85, 0.98))
+            raise HTTPException(status_code=400, detail="Invalid feature format.")
+
+        # Масштабирование признаков (если модель требует scaled инпут)
+        if meta.get("best_model") == "LogisticRegression" and scaler is not None:
+            X_val = scaler.transform(df_input)
+        else:
+            X_val = df_input.values
+
+        # Честный инференс обученной модели
+        pred_idx = int(model.predict(X_val)[0])
+        state_name = TARGET_NAMES.get(str(pred_idx), f"Class_{pred_idx}")
+
+        # Вычисление реальной уверенности и вероятностей классов
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(X_val)[0]
+            confidence = float(np.max(probs))
+            prob_dict = {
+                TARGET_NAMES.get(str(i), f"Class_{i}"): round(float(p), 4) 
+                for i, p in enumerate(probs)
+            }
+        else:
+            confidence = 1.0
+            prob_dict = {state_name: 1.0}
 
         return {
-            "class_index": class_idx,
+            "class_index": pred_idx,
             "prediction": state_name,
             "confidence": round(confidence, 4),
-            "metrics": {
-                "mean": round(mean_val, 4),
-                "std": round(std_val, 4)
-            }
+            "probabilities": prob_dict,
+            "model_used": meta.get("best_model", "Unknown")
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
-
-def _bandpower(data: np.ndarray, fs: int, low: float, high: float) -> float:
-    from scipy import signal as sp_signal
-    if len(data) < 8:
-        return 0.0
-    nperseg = min(256, len(data))
-    freqs, psd = sp_signal.welch(data, fs, nperseg=nperseg, window='hann')
-    idx = np.logical_and(freqs >= low, freqs <= high)
-    if not np.any(idx):
-        return 0.0
-    return float(np.trapezoid(psd[idx], freqs[idx]))
-
-
-@app.post("/rhythms")
-def calculate_rhythms(req: EEGRhythmRequest) -> dict[str, Any]:
-    if not req.channels:
-        raise HTTPException(status_code=400, detail="Empty channel list")
-
-    RHYTHMS: dict[str, tuple[float, float]] = {
-        'delta': (0.5, 4.0),
-        'theta': (4.0, 8.0),
-        'alpha': (8.0, 13.0),
-        'beta': (13.0, 30.0),
-        'gamma': (30.0, 45.0)
-    }
-
-    try:
-        channel_results: dict[str, dict[str, float]] = {}
-        for ch in req.channels:
-            data = np.array(ch.data)
-            if len(data) == 0:
-                continue
-            channel_results[ch.channel] = {}
-            for name, (low, high) in RHYTHMS.items():
-                channel_results[ch.channel][name] = _bandpower(data, req.fs, low, high)
-
-        if channel_results:
-            df_means: dict[str, float] = {name: float(np.mean([ch[name] for ch in channel_results.values()])) for name in RHYTHMS}
-            dominant = max(df_means.keys(), key=lambda k: df_means[k])
-        else:
-            df_means = {name: 0.0 for name in RHYTHMS}
-            dominant = "unknown"
-
-        return {
-            "channel_powers": channel_results,
-            "mean_powers": {k: round(v, 6) for k, v in df_means.items()},
-            "dominant_rhythm": dominant,
-            "dominant_value": round(df_means[dominant], 6) if dominant != "unknown" else 0.0,
-            "fs": req.fs
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rhythm calculation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")

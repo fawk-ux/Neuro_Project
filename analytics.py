@@ -71,7 +71,9 @@ class EEGRhythmAnalyzer:
         idx = np.logical_and(freqs >= low, freqs <= high)
         if not np.any(idx):
             return 0.0
-        return float(np.trapezoid(psd[idx], freqs[idx]))
+        if hasattr(np, 'trapezoid'):
+            return float(getattr(np, 'trapezoid')(psd[idx], freqs[idx]))
+        return float(getattr(np, 'trapz')(psd[idx], freqs[idx]))
 
     @classmethod
     def analyze_channels(

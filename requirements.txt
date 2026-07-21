@@ -1,10 +1,12 @@
-# Core data & ML
-numpy>=1.24.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Core data & ML (ограничиваем numpy < 2.0.0 для стабильности shap и mne)
+numpy>=1.24.0,<2.0.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 scipy>=1.11.0
 
-# Deep Learning (если используешь PyTorch CNN для EEG)
+# Deep Learning (CPU-версия)
 torch>=2.0.0
 torchvision>=0.15.0
 
@@ -26,8 +28,6 @@ requests>=2.31.0
 # Data handling
 pydantic>=2.0.0
 
-# Explanability (SHAP + LLM explanations)
+# Explanability & EEG
 shap>=0.42.0
-
-# Optional: for advanced EEG processing
 mne>=1.5.0
